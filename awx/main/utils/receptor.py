@@ -7,10 +7,11 @@ from receptorctl.socket_interface import ReceptorControl
 
 logger = logging.getLogger('awx.main.utils.receptor')
 
+__RECEPTOR_CONF = '/etc/receptor/receptor.conf'
+
 
 def get_receptor_sockfile():
-    receptor_conf = '/etc/receptor/receptor.conf'
-    with open(receptor_conf, 'r') as f:
+    with open(__RECEPTOR_CONF, 'r') as f:
         data = yaml.safe_load(f)
     for section in data:
         for entry_name, entry_data in section.items():
@@ -18,18 +19,42 @@ def get_receptor_sockfile():
                 if 'filename' in entry_data:
                     return entry_data['filename']
                 else:
-                    raise RuntimeError(f'Receptor conf {receptor_conf} control-service entry does not have a filename parameter')
+                    raise RuntimeError(f'Receptor conf {__RECEPTOR_CONF} control-service entry does not have a filename parameter')
     else:
-        raise RuntimeError(f'Receptor conf {receptor_conf} does not have control-service entry needed to get sockfile')
+        raise RuntimeError(f'Receptor conf {__RECEPTOR_CONF} does not have control-service entry needed to get sockfile')
+
+
+def get_receptor_tls_client():
+    with open(__RECEPTOR_CONF, 'r') as f:
+        data = yaml.safe_load(f)
+    for section in data:
+        for entry_name, entry_data in section.items():
+            if entry_name == 'tls-client':
+                if 'name' in entry_data:
+                    return entry_data['name']
+    return None
 
 
 def get_receptor_ctl():
     receptor_sockfile = get_receptor_sockfile()
-    return ReceptorControl(receptor_sockfile)
+    return ReceptorControl(receptor_sockfile, config=RECEPTOR_CONF, tlsclient=get_receptor_tls_client())
+
+
+def get_conn_type(node_name, receptor_ctl):
+    """
+    ConnType 0: Datagram
+    ConnType 1: Stream
+    ConnType 2: StreamTLS
+    """
+    all_nodes = receptor_ctl.simple_command("status").get('Advertisements', None)
+    for node in all_nodes:
+        if node.get('NodeID') == node_name:
+            return node.get('ConnType')
 
 
 def worker_info(node_name, work_type='ansible-runner'):
     receptor_ctl = get_receptor_ctl()
+    use_stream_tls = True if get_conn_type(node_name, receptor_ctl) == 2 else False
     transmit_start = time.time()
     error_list = []
     data = {'errors': error_list, 'transmit_timing': 0.0}
@@ -37,7 +62,12 @@ def worker_info(node_name, work_type='ansible-runner'):
     kwargs = {}
     if work_type != 'local':
         kwargs['ttl'] = '20s'
-    result = receptor_ctl.submit_work(worktype=work_type, payload='', params={"params": f"--worker-info"}, node=node_name, **kwargs)
+    if use_stream_tls:
+        result = receptor_ctl.submit_work(
+            worktype=work_type, payload='', params={"params": f"--worker-info"}, node=node_name, tlsclient=get_receptor_tls_client(), **kwargs
+        )
+    else:
+        result = receptor_ctl.submit_work(worktype=work_type, payload='', params={"params": f"--worker-info"}, node=node_name, **kwargs)
 
     unit_id = result['unitid']
     run_start = time.time()
