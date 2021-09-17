@@ -7,7 +7,7 @@ services:
   - docker
 before_install:
   - docker login -u "$DOCKER_USERNAME" -p $DOCKER_PASSWORD
-  - apt install ansible
+  - sudo apt install ansible
 script: 
   - export BUILD_TAG=`date +%Y%m%d`
   - make Dockerfile
